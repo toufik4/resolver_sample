@@ -30,14 +30,19 @@ void on_resolve(const boost::system::error_code& ec,
 }
 
 int main() {
-
+ while(1)
+    {
     try {
         boost::asio::io_context io_context;
         
         tcp::resolver resolver(io_context);
         std::string host = "www.google.com";
         std::string port = "80";
+        std::cout << "Enter host" << std::endl;
+        std::cin >> host;
 
+        if(host == "000")
+            break;
         auto lamb = [host](const boost::system::error_code& ec,
                tcp::resolver::results_type results) {
             if (ec) {
@@ -60,6 +65,6 @@ int main() {
     catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << "\n";
     }
-
+    }
     return 0;
 }
