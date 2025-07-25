@@ -30,6 +30,9 @@ void on_resolve(const boost::system::error_code& ec,
 }
 
 int main() {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+#endif    
  while(1)
     {
     try {
@@ -38,7 +41,7 @@ int main() {
         tcp::resolver resolver(io_context);
         std::string host = "www.google.com";
         std::string port = "80";
-        std::cout << "Enter host" << std::endl;
+        std::cout << "🔹 Enter host" << std::endl;
         std::cin >> host;
 
         if(host == "000")
@@ -50,7 +53,7 @@ int main() {
                 return;
             }
 
-            std::cout << "Solving " << host << " OK:\n";
+            std::cout << "✅ Solving " << host << " OK:\n";
             for (const auto& entry : results) {
                 std::cout << entry.endpoint().address().to_string() << "\n";
             }
