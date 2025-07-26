@@ -6,7 +6,9 @@
 // Utilisation d'un seul io(io_context) pour toutes les résolutions
 // Il faut un io.restart() pour accepter de nouvelles résolutions
 // work_guard pour éviter que io.run() ne sorte trop tôt
-// [NEW] Encapsulation dans une seule classe Resolver
+// Encapsulation dans une seule classe Resolver
+// [NEW] runner_ [le thread qui execute  io.run()] au niveau de Resolver
+// [NEW] work_guard au niveau de Resolver
 
 // Author : Toufik ABDELMOUMENE
 
@@ -26,14 +28,37 @@ using boost::asio::ip::tcp;
 class Resolver : public std::enable_shared_from_this<Resolver>
 {
 public:
-    Resolver(boost::asio::io_context& io)
-        : resolver_(io){}
+    Resolver()
+        : resolver_(io_), 
+        work_guard_(boost::asio::make_work_guard(io_)),
+        runner_([&]() {
+                        this->run();
+                }) {}
 
-    void add_host(std::string host, std::string service = "http") {
+    ~Resolver() {
+        if (runner_.joinable()) {
+            runner_.join();
+        }
+    }
+    void run() {
+       std::cout << "Runner ID: " << std::this_thread::get_id() << std::endl;
+       io_.run();
+       std::cout << "🧵 io_context terminé.\n";
+    }
+
+    void stop() {
+        std::lock_guard<std::mutex> lock(stop_mutex_);
+        if (!stopped_) {
+            stopped_ = true;
+            work_guard_.reset();  // Permet à io_context de sortir de run()
+            io_.stop();
+        }
+    }
+    void add_host(std::string host, std::string service = "http"){
         std::lock_guard<std::mutex> lock(mutex_);
         std::cout << "🔧 add_host: " << host << std::endl;
         hosts_.emplace_back(std::move(host), std::move(service));
-        
+
         if (!hosts_.empty())
         {
             auto self = shared_from_this();
@@ -43,20 +68,24 @@ public:
         }
     }
 
-    void remove_host(const std::string& host) {
+    void remove_host(const std::string& host)
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         std::cout << "🗑 remove_host: " << host << std::endl;
         hosts_.erase(std::remove_if(hosts_.begin(), hosts_.end(),
-                                    [&](auto const& hs){ return hs.first == host; }),
+                                    [&](auto const &hs)
+                                    { return hs.first == host; }),
                      hosts_.end());
     }
 
 private:
-    void resolve_next() {
+    void resolve_next()
+    {
         std::string host, service;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (hosts_.empty()) {
+            if (hosts_.empty())
+            {
                 return;
             }
 
@@ -68,59 +97,61 @@ private:
         auto self = shared_from_this();
         std::cout << "🌐 Résolution: " << host << std::endl;
         resolver_.async_resolve(host, service,
-            [this, self, host](const boost::system::error_code& ec,
-                               tcp::resolver::results_type results)
-        {
-            std::cout << "Thread ID: " << std::this_thread::get_id() << std::endl;
-            if (ec) {
-                std::cerr << "❌ DNS failure for " << host << ": " << ec.message() << "\n";
-            } else {
-                std::cout << "✅ Résultat DNS pour " << host << " :\n";
-                for (auto const& r : results)
-                    std::cout << "  -> " << r.endpoint() << "\n";
-            }
+                                [this, self, host](const boost::system::error_code &ec,
+                                                   tcp::resolver::results_type results)
+                                {
+                                    std::cout << "Thread ID: " << std::this_thread::get_id() << std::endl;
+                                    if (ec)
+                                    {
+                                        std::cerr << "❌ DNS failure for " << host << ": " << ec.message() << "\n";
+                                    }
+                                    else
+                                    {
+                                        std::cout << "✅ Résultat DNS pour " << host << " :\n";
+                                        for (auto const &r : results)
+                                            std::cout << "  -> " << r.endpoint() << "\n";
+                                    }
 
-            // Continuer avec le prochain host sans timer
-            resolve_next();
-        });
+                                    // Continuer avec le prochain host sans timer
+                                    resolve_next();
+                                });
     }
 
+    boost::asio::io_context io_; // should be unique
     tcp::resolver resolver_;
     std::deque<std::pair<std::string, std::string>> hosts_;
     std::mutex mutex_;
+    std::thread runner_;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
+    bool stopped_ = false;
+    std::mutex stop_mutex_;
 };
 
-int main() {
+int main()
+{
 #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
 #endif
     std::cout << "main ID: " << std::this_thread::get_id() << std::endl;
     std::cout << "🚀 Lancement...\n";
-    boost::asio::io_context io;
 
-    auto work_guard = boost::asio::make_work_guard(io);
-    auto resolver = std::make_shared<Resolver>(io);
+    auto resolver = std::make_shared<Resolver>();
 
-    std::thread runner([&]() {
-        std::cout << "Runner ID: " << std::this_thread::get_id() << std::endl;
-        io.run();
-        std::cout << "🧵 io_context terminé.\n";
-    });
-
-    while (true) {
+    while (true)
+    {
         std::string host;
         std::cout << "🔹 Entrez un nom d'hôte (ou '000' pour quitter) : ";
         std::cin >> host;
 
-        if (host == "000") {
-            work_guard.reset();
+        if (host == "000")
+        {
+            resolver->stop();
             break;
         }
 
         resolver->add_host(host);
     }
 
-    runner.join();
     std::cout << "✅ Fin normale.\n";
     return 0;
 }
