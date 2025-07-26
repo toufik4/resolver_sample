@@ -5,81 +5,122 @@
 // Illustre cas ecole de résolution à travers un boost::asio::io
 // Utilisation d'un seul io(io_context) pour toutes les résolutions
 // Il faut un io.restart() pour accepter de nouvelles résolutions
-// [NEW] work_guard pour éviter que io.run() ne sorte trop tôt
+// work_guard pour éviter que io.run() ne sorte trop tôt
 // [NEW] Encapsulation dans une seule classe Resolver
 
 // Author : Toufik ABDELMOUMENE
 
 // File: resolver.cpp
 
-
 #include <boost/asio.hpp>
 #include <iostream>
+#include <deque>
+#include <mutex>
+#include <memory>
+#include <thread>
+#include <algorithm>
+#include <windows.h>
 
 using boost::asio::ip::tcp;
 
-void on_resolve(const boost::system::error_code& ec,
-                tcp::resolver::results_type results)
+class Resolver : public std::enable_shared_from_this<Resolver>
 {
-    if (ec) {
-        std::cerr << "Erreur de résolution: " << ec.message() << "\n";
-        return;
+public:
+    Resolver(boost::asio::io_context& io)
+        : resolver_(io){}
+
+    void add_host(std::string host, std::string service = "http") {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::cout << "🔧 add_host: " << host << std::endl;
+        hosts_.emplace_back(std::move(host), std::move(service));
+        
+        if (!hosts_.empty())
+        {
+            auto self = shared_from_this();
+            boost::asio::post(resolver_.get_executor(), [this, self]() {
+                resolve_next();
+            });
+        }
     }
 
-    std::cout << "Solve OK:\n";
-    for (const auto& entry : results) {
-        std::cout << entry.endpoint().address().to_string() << "\n";
+    void remove_host(const std::string& host) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::cout << "🗑 remove_host: " << host << std::endl;
+        hosts_.erase(std::remove_if(hosts_.begin(), hosts_.end(),
+                                    [&](auto const& hs){ return hs.first == host; }),
+                     hosts_.end());
     }
-}
+
+private:
+    void resolve_next() {
+        std::string host, service;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (hosts_.empty()) {
+                return;
+            }
+
+            host = std::move(hosts_.front().first);
+            service = std::move(hosts_.front().second);
+            hosts_.pop_front();
+        }
+
+        auto self = shared_from_this();
+        std::cout << "🌐 Résolution: " << host << std::endl;
+        resolver_.async_resolve(host, service,
+            [this, self, host](const boost::system::error_code& ec,
+                               tcp::resolver::results_type results)
+        {
+            std::cout << "Thread ID: " << std::this_thread::get_id() << std::endl;
+            if (ec) {
+                std::cerr << "❌ DNS failure for " << host << ": " << ec.message() << "\n";
+            } else {
+                std::cout << "✅ Résultat DNS pour " << host << " :\n";
+                for (auto const& r : results)
+                    std::cout << "  -> " << r.endpoint() << "\n";
+            }
+
+            // Continuer avec le prochain host sans timer
+            resolve_next();
+        });
+    }
+
+    tcp::resolver resolver_;
+    std::deque<std::pair<std::string, std::string>> hosts_;
+    std::mutex mutex_;
+};
 
 int main() {
 #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
-#endif  
-    boost::asio::io_context io;       
-    tcp::resolver resolver(io);  
+#endif
+    std::cout << "main ID: " << std::this_thread::get_id() << std::endl;
+    std::cout << "🚀 Lancement...\n";
+    boost::asio::io_context io;
 
-    // Pour empêcher io.run() de s’arrêter immédiatement.
-     auto work_guard = boost::asio::make_work_guard(io);
+    auto work_guard = boost::asio::make_work_guard(io);
+    auto resolver = std::make_shared<Resolver>(io);
 
- while(1)
-    {
-    try {
+    std::thread runner([&]() {
+        std::cout << "Runner ID: " << std::this_thread::get_id() << std::endl;
+        io.run();
+        std::cout << "🧵 io_context terminé.\n";
+    });
 
-        std::string host = "www.google.com";
-        std::string port = "80";
-        std::cout << "🔹 Enter host" << std::endl;
+    while (true) {
+        std::string host;
+        std::cout << "🔹 Entrez un nom d'hôte (ou '000' pour quitter) : ";
         std::cin >> host;
 
-        if(host == "000"){
-            work_guard.reset(); // indique que io peut s’arrêter.
+        if (host == "000") {
+            work_guard.reset();
             break;
         }
-        auto lamb = [host](const boost::system::error_code& ec,
-               tcp::resolver::results_type results) {
-            if (ec) {
-                std::cerr << "Erreur pour " << host << ": " << ec.message() << "\n";
-                return;
-            }
 
-            std::cout << "✅ Solving " << host << " OK:\n";
-            for (const auto& entry : results) {
-                std::cout << entry.endpoint().address().to_string() << "\n";
-            }
-        };
-        // Démarre la résolution asynchrone
-        resolver.async_resolve(host, port, lamb);
-        
+        resolver->add_host(host);
+    }
 
-            // 🔧 Redémarrer le contexte pour accepter de nouvelles opérations
-            io.restart();
-
-            // 🔁 Relancer le traitement des événements asynchrones
-            io.run();
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Exception: " << e.what() << "\n";
-    }
-    }
+    runner.join();
+    std::cout << "✅ Fin normale.\n";
     return 0;
 }
