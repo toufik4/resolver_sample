@@ -2,9 +2,12 @@
 
 // Puprose:
 // Exemple simple de résolution dns asynchrone
-// Illustre cas ecole de résolution à travers un boost::asio::io_context
-// [NEW] Utilisation d'un seul io_context pour toutes les résolutions
-// [NEW] Il faut un io.restart() pour accepter de nouvelles résolutions
+// Illustre cas ecole de résolution à travers un boost::asio::io
+// Utilisation d'un seul io(io_context) pour toutes les résolutions
+// Il faut un io.restart() pour accepter de nouvelles résolutions
+// [NEW] work_guard pour éviter que io.run() ne sorte trop tôt
+// [NEW] Encapsulation dans une seule classe Resolver
+
 // Author : Toufik ABDELMOUMENE
 
 // File: resolver.cpp
@@ -33,8 +36,11 @@ int main() {
 #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
 #endif  
-    boost::asio::io_context io_context;       
-    tcp::resolver resolver(io_context);  
+    boost::asio::io_context io;       
+    tcp::resolver resolver(io);  
+
+    // Pour empêcher io.run() de s’arrêter immédiatement.
+     auto work_guard = boost::asio::make_work_guard(io);
 
  while(1)
     {
@@ -45,8 +51,10 @@ int main() {
         std::cout << "🔹 Enter host" << std::endl;
         std::cin >> host;
 
-        if(host == "000")
+        if(host == "000"){
+            work_guard.reset(); // indique que io peut s’arrêter.
             break;
+        }
         auto lamb = [host](const boost::system::error_code& ec,
                tcp::resolver::results_type results) {
             if (ec) {
@@ -64,10 +72,10 @@ int main() {
         
 
             // 🔧 Redémarrer le contexte pour accepter de nouvelles opérations
-            io_context.restart();
+            io.restart();
 
             // 🔁 Relancer le traitement des événements asynchrones
-            io_context.run();
+            io.run();
     }
     catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << "\n";
