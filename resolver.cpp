@@ -3,8 +3,8 @@
 // Puprose:
 // Exemple simple de résolution dns asynchrone
 // Illustre cas ecole de résolution à travers un boost::asio::io_context
-//
-
+// [NEW] Utilisation d'un seul io_context pour toutes les résolutions
+// [NEW] Il faut un io.restart() pour accepter de nouvelles résolutions
 // Author : Toufik ABDELMOUMENE
 
 // File: resolver.cpp
@@ -32,13 +32,14 @@ void on_resolve(const boost::system::error_code& ec,
 int main() {
 #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
-#endif    
+#endif  
+    boost::asio::io_context io_context;       
+    tcp::resolver resolver(io_context);  
+
  while(1)
     {
     try {
-        boost::asio::io_context io_context;
-        
-        tcp::resolver resolver(io_context);
+
         std::string host = "www.google.com";
         std::string port = "80";
         std::cout << "🔹 Enter host" << std::endl;
@@ -62,8 +63,11 @@ int main() {
         resolver.async_resolve(host, port, lamb);
         
 
-        // Lancement de la boucle d'événements
-        io_context.run();
+            // 🔧 Redémarrer le contexte pour accepter de nouvelles opérations
+            io_context.restart();
+
+            // 🔁 Relancer le traitement des événements asynchrones
+            io_context.run();
     }
     catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << "\n";
