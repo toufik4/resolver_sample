@@ -9,7 +9,8 @@
 // Encapsulation dans une seule classe Resolver
 // runner_ [le thread qui execute  io.run()] au niveau de Resolver
 // work_guard au niveau de Resolver
-// [NEW] Ajout d'un timeout de résolution DNS
+// Ajout d'un timeout de résolution DNS
+// [NEW] Ajout class Request pour encapsuler les requêtes DNS
 
 // Author : Toufik ABDELMOUMENE
 
@@ -25,6 +26,35 @@
 #include <windows.h>
 
 using boost::asio::ip::tcp;
+
+class Request {
+public:
+    std::string host_;
+    std::string service_;
+    std::vector<std::string> ips_;
+
+    Request(std::string host, std::string service = "http")
+        : host_(std::move(host)), service_(std::move(service)) {}
+
+    void add_ip(const std::string& ip) {
+        ips_.push_back(ip);
+    };
+
+    friend std::ostream& operator<<(std::ostream& os, const Request& req) {
+    os << "🌍 Host: " << req.host_ << "\n";
+    //os << "🔌 Service: " << req.service_ << "\n";
+    if (req.ips_.empty()) {
+        os << "❗ Aucun résultat DNS.\n";
+    } else {
+        os << "✅ IPs:\n";
+        for (const auto& ip : req.ips_) {
+            os << "  -> " << ip << "\n";
+        }
+    }
+    return os;
+}
+
+};
 
 class Resolver : public std::enable_shared_from_this<Resolver>
 {
@@ -155,6 +185,7 @@ private:
         };
         resolver_.async_resolve(host, service, lam_solve);
     }
+
 
     boost::asio::io_context io_; // should be unique
     tcp::resolver resolver_;
