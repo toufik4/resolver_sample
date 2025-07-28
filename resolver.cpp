@@ -28,33 +28,37 @@ using boost::asio::ip::tcp;
 class Resolver : public std::enable_shared_from_this<Resolver>
 {
 public:
-    Resolver()
-        : resolver_(io_), 
-        work_guard_(boost::asio::make_work_guard(io_)),
-        runner_([&]() {
-                        this->run();
-                }) {}
+    Resolver() : resolver_(io_),
+                 work_guard_(boost::asio::make_work_guard(io_)),
+                 runner_([&](){ this->run(); }) 
+                 {}
 
-    ~Resolver() {
-        if (runner_.joinable()) {
+    ~Resolver()
+    {
+        if (runner_.joinable())
+        {
             runner_.join();
         }
     }
-    void run() {
-       std::cout << "Runner ID: " << std::this_thread::get_id() << std::endl;
-       io_.run();
-       std::cout << "🧵 io_context terminé.\n";
+    void run()
+    {
+        std::cout << "Runner ID: " << std::this_thread::get_id() << std::endl;
+        io_.run();
+        std::cout << "🧵 io_context terminé.\n";
     }
 
-    void stop() {
+    void stop()
+    {
         std::lock_guard<std::mutex> lock(stop_mutex_);
-        if (!stopped_) {
+        if (!stopped_)
+        {
             stopped_ = true;
-            work_guard_.reset();  // Permet à io_context de sortir de run()
+            work_guard_.reset(); // Permet à io_context de sortir de run()
             io_.stop();
         }
     }
-    void add_host(std::string host, std::string service = "http"){
+    void add_host(std::string host, std::string service = "http")
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         std::cout << "🔧 add_host: " << host << std::endl;
         hosts_.emplace_back(std::move(host), std::move(service));
@@ -62,9 +66,9 @@ public:
         if (!hosts_.empty())
         {
             auto self = shared_from_this();
-            boost::asio::post(resolver_.get_executor(), [this, self]() {
-                resolve_next();
-            });
+            boost::asio::post(resolver_.get_executor(),
+                              [this, self]()
+                              { resolve_next(); });
         }
     }
 
@@ -96,25 +100,25 @@ private:
 
         auto self = shared_from_this();
         std::cout << "🌐 Résolution: " << host << std::endl;
-        resolver_.async_resolve(host, service,
-                                [this, self, host](const boost::system::error_code &ec,
-                                                   tcp::resolver::results_type results)
-                                {
-                                    std::cout << "Thread ID: " << std::this_thread::get_id() << std::endl;
-                                    if (ec)
-                                    {
-                                        std::cerr << "❌ DNS failure for " << host << ": " << ec.message() << "\n";
-                                    }
-                                    else
-                                    {
-                                        std::cout << "✅ Résultat DNS pour " << host << " :\n";
-                                        for (auto const &r : results)
-                                            std::cout << "  -> " << r.endpoint() << "\n";
-                                    }
+        auto lam = [this, self, host](const boost::system::error_code &ec,
+                                      tcp::resolver::results_type results)
+        {
+            std::cout << "Thread ID: " << std::this_thread::get_id() << std::endl;
+            if (ec)
+            {
+                std::cerr << "❌ DNS failure for " << host << ": " << ec.message() << "\n";
+            }
+            else
+            {
+                std::cout << "✅ Résultat DNS pour " << host << " :\n";
+                for (auto const &r : results)
+                    std::cout << "  -> " << r.endpoint() << "\n";
+            }
 
-                                    // Continuer avec le prochain host sans timer
-                                    resolve_next();
-                                });
+            // Continuer avec le prochain host sans timer
+            resolve_next();
+        };
+        resolver_.async_resolve(host, service, lam);
     }
 
     boost::asio::io_context io_; // should be unique
@@ -143,7 +147,7 @@ int main()
         std::cout << "🔹 Entrez un nom d'hôte (ou '000' pour quitter) : ";
         std::cin >> host;
 
-        if (host == "000")
+        if (host == "stop")
         {
             resolver->stop();
             break;
