@@ -30,8 +30,10 @@ class Resolver : public std::enable_shared_from_this<Resolver>
 public:
     Resolver() : resolver_(io_),
                  work_guard_(boost::asio::make_work_guard(io_)),
-                 runner_([&](){ this->run(); }) 
-                 {}
+                 runner_([&]()
+                         { this->run(); })
+    {
+    }
 
     ~Resolver()
     {
@@ -72,7 +74,7 @@ public:
         }
     }
 
-    void remove_host(const std::string& host)
+    void remove_host(const std::string &host)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         std::cout << "🗑 remove_host: " << host << std::endl;
@@ -89,9 +91,7 @@ private:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (hosts_.empty())
-            {
                 return;
-            }
 
             host = std::move(hosts_.front().first);
             service = std::move(hosts_.front().second);
@@ -100,13 +100,32 @@ private:
 
         auto self = shared_from_this();
         std::cout << "🌐 Résolution: " << host << std::endl;
+
+        // Démarrer le timer avant la résolution
+        timeout_timer_.expires_after(timeout_duration_);
+        auto lam_wait = [this, self, host](const boost::system::error_code &ec)
+        {
+            if (!ec)
+            {
+                std::cout << "⏳ Timeout atteint pour " << host << ", on annule la résolution.\n";
+                resolver_.cancel(); // Annule toutes les résolutions en cours
+            }
+        };
+        timeout_timer_.async_wait(lam_wait);
+
         auto lam = [this, self, host](const boost::system::error_code &ec,
                                       tcp::resolver::results_type results)
         {
-            std::cout << "Thread ID: " << std::this_thread::get_id() << std::endl;
-            if (ec)
+            // Annuler le timer si la résolution est terminée
+            timeout_timer_.cancel();
+
+            if (ec == boost::asio::error::operation_aborted)
             {
-                std::cerr << "❌ DNS failure for " << host << ": " << ec.message() << "\n";
+                std::cerr << "🚫 Résolution annulée pour " << host << "\n";
+            }
+            else if (ec)
+            {
+                std::cerr << "❌ DNS failure pour " << host << ": " << ec.message() << "\n";
             }
             else
             {
@@ -129,6 +148,10 @@ private:
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
     bool stopped_ = false;
     std::mutex stop_mutex_;
+
+    // Timeout de résolution
+    std::chrono::seconds timeout_duration_{4};    // Timeout configurable
+    boost::asio::steady_timer timeout_timer_{io_}; // Timer lié à io_context
 };
 
 int main()
@@ -144,7 +167,7 @@ int main()
     while (true)
     {
         std::string host;
-        std::cout << "🔹 Entrez un nom d'hôte (ou '000' pour quitter) : ";
+        std::cout << "🔹 Entrez un nom d'hôte (ou 'stop' pour quitter) : ";
         std::cin >> host;
 
         if (host == "stop")
