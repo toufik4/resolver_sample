@@ -7,8 +7,9 @@
 // Il faut un io.restart() pour accepter de nouvelles résolutions
 // work_guard pour éviter que io.run() ne sorte trop tôt
 // Encapsulation dans une seule classe Resolver
-// [NEW] runner_ [le thread qui execute  io.run()] au niveau de Resolver
-// [NEW] work_guard au niveau de Resolver
+// runner_ [le thread qui execute  io.run()] au niveau de Resolver
+// work_guard au niveau de Resolver
+// [NEW] Ajout d'un timeout de résolution DNS
 
 // Author : Toufik ABDELMOUMENE
 
@@ -57,6 +58,17 @@ public:
             stopped_ = true;
             work_guard_.reset(); // Permet à io_context de sortir de run()
             io_.stop();
+        }
+    }
+
+    void print()
+    {
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::cout << "🧵 Listing ...\n";
+        for (auto host : hosts_)
+        {
+            std::cout << host.first << std::endl;
         }
     }
     void add_host(std::string host, std::string service = "http")
@@ -113,19 +125,23 @@ private:
         };
         timeout_timer_.async_wait(lam_wait);
 
-        auto lam = [this, self, host](const boost::system::error_code &ec,
-                                      tcp::resolver::results_type results)
+        auto lam_solve = [this, self, host](const boost::system::error_code &ec,
+                                            tcp::resolver::results_type results)
         {
             // Annuler le timer si la résolution est terminée
             timeout_timer_.cancel();
 
             if (ec == boost::asio::error::operation_aborted)
             {
-                std::cerr << "🚫 Résolution annulée pour " << host << "\n";
+                std::cerr << "⏳ Timeout atteint ou résolution annulée pour " << host << "\n";
+            }
+            else if (ec == boost::asio::error::host_not_found)
+            {
+                std::cerr << "❌ Hôte introuvable : " << host << " (erreur DNS immédiate)\n";
             }
             else if (ec)
             {
-                std::cerr << "❌ DNS failure pour " << host << ": " << ec.message() << "\n";
+                std::cerr << "❌ Autre échec DNS pour " << host << ": " << ec.message() << "\n";
             }
             else
             {
@@ -137,7 +153,7 @@ private:
             // Continuer avec le prochain host sans timer
             resolve_next();
         };
-        resolver_.async_resolve(host, service, lam);
+        resolver_.async_resolve(host, service, lam_solve);
     }
 
     boost::asio::io_context io_; // should be unique
@@ -150,7 +166,7 @@ private:
     std::mutex stop_mutex_;
 
     // Timeout de résolution
-    std::chrono::seconds timeout_duration_{4};    // Timeout configurable
+    std::chrono::seconds timeout_duration_{2};     // Timeout configurable
     boost::asio::steady_timer timeout_timer_{io_}; // Timer lié à io_context
 };
 
@@ -174,6 +190,12 @@ int main()
         {
             resolver->stop();
             break;
+        }
+
+        if (host == "print")
+        {
+            resolver->print();
+            continue;
         }
 
         resolver->add_host(host);
